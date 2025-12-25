@@ -7,6 +7,7 @@ import (
 
 	"github.com/aws/aws-sdk-go-v2/config"
 	"github.com/aws/aws-sdk-go-v2/service/sqs"
+	"github.com/joho/godotenv"
 	"github.com/labstack/echo/v4"
 	"github.com/labstack/echo/v4/middleware"
 
@@ -15,6 +16,11 @@ import (
 )
 
 func main() {
+	// .env読み込み
+	if err := godotenv.Load(); err != nil {
+		log.Println("No .env file found, using system environment variables")
+	}
+
 	// AWS設定の読み込み
 	cfg, err := config.LoadDefaultConfig(context.Background())
 	if err != nil {

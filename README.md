@@ -37,24 +37,35 @@ api/
 - ✅ 失敗しても壊れない
 - ✅ DLQ 前提
 
+## 環境変数 (.env)
+
+プロジェクトルートに `.env` ファイルを作成して設定します。
+
+```env
+# AWS認証情報
+AWS_ACCESS_KEY_ID=your_access_key
+AWS_SECRET_ACCESS_KEY=your_secret_key
+AWS_REGION=ap-northeast-1
+
+# SQS Queue URL
+SQS_QUEUE_URL="https://sqs.ap-northeast-1.amazonaws.com/×/job-queue"
+
+# アプリケーション設定
+MAX_RETRY=5
+PORT=8080
+```
+
 ## 使い方
 
 ```bash
-# AWS認証情報
-export AWS_ACCESS_KEY_ID=your_access_key
-export AWS_SECRET_ACCESS_KEY=your_secret_key
-export AWS_REGION=ap-northeast-1
-
-# SQS Queue URL
-export SQS_QUEUE_URL="https://sqs.ap-northeast-1.amazonaws.com/466703337425/job-queue"
-
 # API起動
 go run ./cmd/api
 
 # Worker起動（別ターミナル）
 go run ./cmd/worker
 ```
-※同一ディレクトリ内にgo.workが含まれている場合は `GOWORK=off` が必要な場合があります。
+※ `.env` ファイルが自動的に読み込まれます。
+
 
 ## API呼び出し例
 

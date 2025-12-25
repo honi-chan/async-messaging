@@ -11,6 +11,7 @@ import (
 	"github.com/aws/aws-sdk-go-v2/aws"
 	"github.com/aws/aws-sdk-go-v2/config"
 	"github.com/aws/aws-sdk-go-v2/service/sqs"
+	"github.com/joho/godotenv"
 
 	"async-messaging/internal/event"
 	"async-messaging/internal/queue"
@@ -18,6 +19,11 @@ import (
 )
 
 func main() {
+	// .env読み込み
+	if err := godotenv.Load(); err != nil {
+		log.Println("No .env file found, using system environment variables")
+	}
+
 	ctx, cancel := context.WithCancel(context.Background())
 	defer cancel()
 
