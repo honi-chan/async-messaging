@@ -27,6 +27,7 @@ func main() {
 		log.Fatalf("unable to load SDK config: %v", err)
 	}
 
+	// 「この設定でSQS使いますよ」という準備
 	sqsClient := sqs.NewFromConfig(cfg)
 
 	// 環境変数からキューURLを取得（本番環境向け）
@@ -35,9 +36,10 @@ func main() {
 		queueURL = "https://sqs.ap-northeast-1.amazonaws.com/466703337425/job-queue"
 	}
 
+	// キューを簡単に使うための専用道具を作っている
 	queueClient := queue.NewClient(sqsClient, queueURL)
 
-	// Echo初期化
+	// Echo初期化(Web サーバーを作っている)
 	e := echo.New()
 	e.Use(middleware.Logger())
 	e.Use(middleware.Recover())
