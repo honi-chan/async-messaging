@@ -9,7 +9,7 @@ import (
 	"github.com/labstack/echo/v4"
 
 	"async-messaging/internal/event"
-	"async-messaging/internal/queue"
+	"async-messaging/internal/pubsub"
 )
 
 // CreateJobRequest はジョブ作成リクエスト
@@ -20,16 +20,16 @@ type CreateJobRequest struct {
 
 // CreateJobHandler はジョブ作成ハンドラー
 type CreateJobHandler struct {
-	queue *queue.Client
+	publisher *pubsub.Publisher
 }
 
 // NewCreateJobHandler は新しいハンドラーを作成
-func NewCreateJobHandler(q *queue.Client) *CreateJobHandler {
-	return &CreateJobHandler{queue: q}
+func NewCreateJobHandler(p *pubsub.Publisher) *CreateJobHandler {
+	return &CreateJobHandler{publisher: p}
 }
 
 // Handle はジョブ作成リクエストを処理
-// 非同期APIの要：処理は行わず、キューへの投入のみ
+// 非同期APIの要：処理は行わず、SNSトピックへのPublishのみ
 func (h *CreateJobHandler) Handle(c echo.Context) error {
 	var req CreateJobRequest
 
@@ -37,23 +37,24 @@ func (h *CreateJobHandler) Handle(c echo.Context) error {
 		return c.JSON(http.StatusBadRequest, map[string]string{"error": "invalid request"})
 	}
 
-	ev := event.JobCreated{
-		ID:   uuid.NewString(),
-		Type: "job.created",
-		Payload: event.Payload{
-			UserID: req.UserID,
-			Input:  req.Input,
-		},
+	payload := event.JobPayload{
+		UserID: req.UserID,
+		Input:  req.Input,
+	}
+	payloadBytes, _ := json.Marshal(payload)
+
+	ev := event.Event{
+		ID:        uuid.NewString(),
+		Type:      "job.created",
+		Payload:   payloadBytes,
 		CreatedAt: time.Now(),
 	}
 
-	b, _ := json.Marshal(ev)
-	if err := h.queue.Send(c.Request().Context(), string(b)); err != nil {
-		return c.JSON(http.StatusInternalServerError, map[string]string{"error": "queue failed"})
+	if err := h.publisher.Publish(c.Request().Context(), ev); err != nil {
+		return c.JSON(http.StatusInternalServerError, map[string]string{"error": "publish failed"})
 	}
 
 	// 非同期APIの要：200ではなく202 Accepted
-	// 成功 = キュー投入成功
 	return c.JSON(http.StatusAccepted, map[string]string{
 		"job_id": ev.ID,
 		"status": "accepted",

@@ -3,56 +3,35 @@ package usecase
 import (
 	"context"
 	"encoding/json"
-	"log"
-	"os"
-	"strconv"
+	"fmt"
 
 	"async-messaging/internal/event"
-	"async-messaging/internal/queue"
 )
 
-// getMaxRetry は環境変数からmaxRetryを取得（デフォルト: 5）
-func getMaxRetry() int {
-	if v := os.Getenv("MAX_RETRY"); v != "" {
-		if n, err := strconv.Atoi(v); err == nil {
-			return n
-		}
-	}
-	return 5
-}
-
 // Handler はジョブ処理ハンドラー
-type Handler struct {
-	queue *queue.Client
-}
+type Handler struct{}
 
 // NewHandler は新しいハンドラーを作成
-func NewHandler(q *queue.Client) *Handler {
-	return &Handler{queue: q}
+func NewHandler() *Handler {
+	return &Handler{}
 }
 
-// Handle はジョブを処理し、失敗時はリトライキューに再投入
-func (h *Handler) Handle(ctx context.Context, ev event.JobCreated) error {
-	if ev.RetryCount >= getMaxRetry() {
-		log.Printf("discard message id=%s after %d retries", ev.ID, ev.RetryCount)
-		return nil
+// Handle はジョブを処理
+// 失敗時はエラーを返し、SQSの標準リトライ機能を活用する (VisibilityTimeout)
+func (h *Handler) Handle(ctx context.Context, ev event.Event) error {
+	// ペイロードをパース
+	var payload event.JobPayload
+	if err := json.Unmarshal(ev.Payload, &payload); err != nil {
+		return fmt.Errorf("failed to unmarshal payload: %w", err)
 	}
 
-	if err := process(ev); err != nil {
-		ev.RetryCount++
-
-		body, _ := json.Marshal(ev)
-		_ = h.queue.Send(ctx, string(body))
-
-		return nil
-	}
-
-	return nil
+	return process(ev.ID, payload)
 }
 
 // process は実際のビジネスロジック
-func process(ev event.JobCreated) error {
+func process(jobID string, payload event.JobPayload) error {
 	// TODO: 実際の処理を実装
 	// 例: 外部API呼び出し、ファイル生成、DBへの書き込みなど
+	fmt.Printf("Processing job logic: ID=%s, UserID=%s\n", jobID, payload.UserID)
 	return nil
 }

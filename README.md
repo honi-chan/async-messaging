@@ -6,36 +6,36 @@
 
 ## プロジェクト構成
 
+## プロジェクト構成
+
 ```
 api/
 ├── cmd/
 │   ├── api/main.go       # HTTP API サーバー
-│   └── worker/main.go    # SQS Consumer
+│   └── worker/main.go    # SQS Consumer (SNS Subscriber)
 └── internal/
-    ├── event/message.go  # イベントDTO
+    ├── event/event.go    # 共通イベント定義
     ├── handler/create_job.go  # ジョブ作成ハンドラー
-    ├── queue/sqs.go      # SQSクライアント
-    └── usecase/process_job.go # 冪等処理ロジック
+    ├── pubsub/publisher.go    # SNS Publisher
+    └── usecase/process_job.go # 処理ロジック
 ```
 
 ## 実装のポイント
 
 | コンポーネント | 責務 |
 |---|---|
-| **API** | 受付のみ、キュー投入だけ → `202 Accepted` |
-| **Worker** | 実際の処理、冪等性チェック、再実行対応 |
+| **API** | SNS トピックへの Publish のみ（疎結合） |
+| **Worker** | SQS から受信。再試行は SQS の標準機能（VisibilityTimeout + DLQ）に任せる |
 
-### 非同期API設計原則
+### 非同期API設計原則 (Pub/Sub)
 
-- ✅ 処理しない
-- ✅ DB書かない（極力）
-- ✅ キュー送信だけ
+- ✅ Publisher は Subscriber を知らない
+- ✅ イベントは事実として定義
 
 ### Worker設計原則
 
-- ✅ 再実行前提
-- ✅ 失敗しても壊れない
-- ✅ DLQ 前提
+- ✅ SQS 標準のリトライ機構を利用
+- ✅ 手動での再エンキューは行わない (Basic No Philosophy)
 
 ## 環境変数 (.env)
 
@@ -47,11 +47,13 @@ AWS_ACCESS_KEY_ID=your_access_key
 AWS_SECRET_ACCESS_KEY=your_secret_key
 AWS_REGION=ap-northeast-1
 
-# SQS Queue URL
+# SNS Topic ARN (API用)
+SNS_TOPIC_ARN="arn:aws:sns:ap-northeast-1:000000000000:job-topic"
+
+# SQS Queue URL (Worker用)
 SQS_QUEUE_URL="https://sqs.ap-northeast-1.amazonaws.com/×/job-queue"
 
 # アプリケーション設定
-MAX_RETRY=5
 PORT=8080
 ```
 
