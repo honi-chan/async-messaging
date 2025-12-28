@@ -14,7 +14,6 @@ import (
 	"github.com/joho/godotenv"
 
 	"async-messaging/internal/event"
-	"async-messaging/internal/queue"
 	"async-messaging/internal/usecase"
 )
 
@@ -51,9 +50,8 @@ func main() {
 		queueURL = "https://sqs.ap-northeast-1.amazonaws.com/466703337425/job-queue"
 	}
 
-	// キュークライアントとハンドラー初期化
-	queueClient := queue.NewClient(sqsClient, queueURL)
-	handler := usecase.NewHandler(queueClient)
+	// ハンドラー初期化 (Queueへの送信責務は不要になった)
+	handler := usecase.NewHandler()
 
 	log.Printf("Worker started. Listening on queue: %s\n", queueURL)
 
@@ -85,26 +83,47 @@ func processMessages(ctx context.Context, client *sqs.Client, queueURL string, h
 	}
 
 	for _, msg := range out.Messages {
-		var ev event.JobCreated
-		if err := json.Unmarshal([]byte(*msg.Body), &ev); err != nil {
-			log.Printf("unmarshal error (poison message): %v\n", err)
+		if msg.Body == nil {
 			continue
 		}
 
-		log.Printf("Processing job: %s (type: %s, retry: %d)\n", ev.ID, ev.Type, ev.RetryCount)
-
-		// ハンドラーで処理（失敗時は内部でリトライキューに再投入）
-		_ = handler.Handle(ctx, ev)
-
-		// 元メッセージは必ず削除
-		_, err := client.DeleteMessage(ctx, &sqs.DeleteMessageInput{
-			QueueUrl:      aws.String(queueURL),
-			ReceiptHandle: msg.ReceiptHandle,
-		})
-		if err != nil {
-			log.Printf("delete error: %v\n", err)
+		var ev event.Event
+		// NOTE: Assuming Raw Message Delivery is ENABLED on SNS subscription.
+		// If disabled, we would need to unmarshal the SNS JSON wrapper first -> Message field -> event.Event
+		if err := json.Unmarshal([]byte(*msg.Body), &ev); err != nil {
+			log.Printf("unmarshal error (poison message?): %v. Body: %s\n", err, *msg.Body)
+			// 本来はDLQに送るべきだが、ここではVisibilityTimeout経過後に再試行されるのを防ぐため削除するか、
+			// ログに出して無視する。ここでは削除して次へ進む運用とする。
+			deleteMessage(ctx, client, queueURL, msg.ReceiptHandle)
+			continue
 		}
 
-		log.Printf("Job processed: %s\n", ev.ID)
+		log.Printf("Processing event: ID=%s Type=%s\n", ev.ID, ev.Type)
+
+		// イベントタイプによる分岐
+		switch ev.Type {
+		case "job.created":
+			if err := handler.Handle(ctx, ev); err != nil {
+				log.Printf("Handler failed: %v. Message will be retried (VisibilityTimeout).\n", err)
+				// 削除しない = VisibilityTimeout後に再出現
+				continue
+			}
+		default:
+			log.Printf("Unknown event type: %s\n", ev.Type)
+		}
+
+		// 処理成功または未知のイベントなら削除
+		deleteMessage(ctx, client, queueURL, msg.ReceiptHandle)
+		log.Printf("Event processed & deleted: %s\n", ev.ID)
+	}
+}
+
+func deleteMessage(ctx context.Context, client *sqs.Client, queueURL string, receiptHandle *string) {
+	_, err := client.DeleteMessage(ctx, &sqs.DeleteMessageInput{
+		QueueUrl:      aws.String(queueURL),
+		ReceiptHandle: receiptHandle,
+	})
+	if err != nil {
+		log.Printf("delete error: %v\n", err)
 	}
 }

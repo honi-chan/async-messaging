@@ -8,6 +8,7 @@ POST /jobs リクエスト
 │ cmd/api/main.go                                         │
 │   main()                                                │
 │     └─ e.POST("/jobs", h.Handle)  ← ルーティング登録    │
+│     └─ pubsub.NewPublisher(...)   ← SNS Publisher初期化 │
 └─────────────────────────────────────────────────────────┘
        │
        ▼
@@ -16,22 +17,23 @@ POST /jobs リクエスト
 │   CreateJobHandler.Handle(c echo.Context)               │
 │     ├─ c.Bind(&req)           ← リクエストパース        │
 │     ├─ uuid.NewString()       ← ジョブID生成            │
-│     ├─ json.Marshal(ev)       ← イベントJSON化          │
-│     ├─ h.queue.Send(...)      ← SQSへ送信 ───────────┐  │
+│     ├─ json.Marshal(payload)  ← ペイロードJSON化        │
+│     ├─ h.publisher.Publish()  ← SNSへ送信 ───────────┐  │
 │     └─ return 202 Accepted    ← レスポンス返却       │  │
 └──────────────────────────────────────────────────────│──┘
                                                        │
        ┌───────────────────────────────────────────────┘
        ▼
 ┌─────────────────────────────────────────────────────────┐
-│ internal/queue/sqs.go                                   │
-│   Client.Send(ctx, body string)                         │
-│     └─ sqs.SendMessage()      ← AWS SQS API呼び出し     │
+│ internal/pubsub/publisher.go                            │
+│   Publisher.Publish(ctx, ev)                            │
+│     └─ sns.Publish()          ← AWS SNS API呼び出し     │
 └─────────────────────────────────────────────────────────┘
        │
        ▼
-    [SQS Queue]
-       │
+    [SNS Topic] ──(Subscription)──▶ [SQS Queue]
+                                       │
+       ┌───────────────────────────────┘
        ▼
 ┌─────────────────────────────────────────────────────────┐
 │ cmd/worker/main.go                                      │
@@ -48,9 +50,11 @@ POST /jobs リクエスト
 ┌─────────────────────────────────────────────────────────┐
 │ internal/usecase/process_job.go                         │
 │   Handler.Handle(ctx, ev)                               │
-│     ├─ ev.RetryCount >= maxRetry → discard              │
-│     ├─ process(ev)            ← ビジネスロジック        │
-│     └─ (失敗時) h.queue.Send() ← リトライキュー再投入   │
+│     ├─ json.Unmarshal(payload)                          │
+│     └─ process()              ← ビジネスロジック        │
+│                               (失敗時はerror返却        │
+│                                → VisibilityTimeout      │
+│                                → SQSが自動再試行)       │
 └─────────────────────────────────────────────────────────┘
 ```
 
@@ -58,8 +62,8 @@ POST /jobs リクエスト
 
 | # | ファイル | 関数 | 役割 |
 |---|---|---|---|
-| 1 | `cmd/api/main.go` | `main()` | サーバー起動、ルーティング |
-| 2 | `internal/handler/create_job.go` | `Handle()` | リクエスト処理、イベント作成 |
-| 3 | `internal/queue/sqs.go` | `Send()` | SQSへメッセージ送信 |
-| 4 | `cmd/worker/main.go` | `processMessages()` | SQSからメッセージ受信 |
-| 5 | `internal/usecase/process_job.go` | `Handle()` | 冪等処理実行 |
+| 1 | `cmd/api/main.go` | `main()` | サーバー起動、SNS Publisher設定 |
+| 2 | `internal/handler/create_job.go` | `Handle()` | イベント作成、Publish呼び出し |
+| 3 | `internal/pubsub/publisher.go` | `Publish()` | SNS TopicへPublish |
+| 4 | `cmd/worker/main.go` | `processMessages()` | SQSからメッセージ受信 (SNS経由) |
+| 5 | `internal/usecase/process_job.go` | `Handle()` | 処理実行 (再試行はSQS任せ) |

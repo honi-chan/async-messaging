@@ -6,13 +6,13 @@ import (
 	"os"
 
 	"github.com/aws/aws-sdk-go-v2/config"
-	"github.com/aws/aws-sdk-go-v2/service/sqs"
+	"github.com/aws/aws-sdk-go-v2/service/sns"
 	"github.com/joho/godotenv"
 	"github.com/labstack/echo/v4"
 	"github.com/labstack/echo/v4/middleware"
 
 	"async-messaging/internal/handler"
-	"async-messaging/internal/queue"
+	"async-messaging/internal/pubsub"
 )
 
 func main() {
@@ -27,17 +27,19 @@ func main() {
 		log.Fatalf("unable to load SDK config: %v", err)
 	}
 
-	// 「この設定でSQS使いますよ」という準備
-	sqsClient := sqs.NewFromConfig(cfg)
+	// SNSクライアント作成
+	snsClient := sns.NewFromConfig(cfg)
 
-	// 環境変数からキューURLを取得（本番環境向け）
-	queueURL := os.Getenv("SQS_QUEUE_URL")
-	if queueURL == "" {
-		queueURL = "https://sqs.ap-northeast-1.amazonaws.com/466703337425/job-queue"
+	// 環境変数からトピックARNを取得
+	topicArn := os.Getenv("SNS_TOPIC_ARN")
+	// 開発用ダミーARN (本来は必須エラーにするべきだが、動作確認用に入れている場合もある)
+	if topicArn == "" {
+		topicArn = "arn:aws:sns:ap-northeast-1:000000000000:job-topic"
+		log.Println("WARNING: SNS_TOPIC_ARN is not set, using dummy ARN")
 	}
 
-	// キューを簡単に使うための専用道具を作っている
-	queueClient := queue.NewClient(sqsClient, queueURL)
+	// Publisher初期化
+	publisher := pubsub.NewPublisher(snsClient, topicArn)
 
 	// Echo初期化(Web サーバーを作っている)
 	e := echo.New()
@@ -45,7 +47,7 @@ func main() {
 	e.Use(middleware.Recover())
 
 	// ハンドラー登録
-	h := handler.NewCreateJobHandler(queueClient)
+	h := handler.NewCreateJobHandler(publisher)
 	e.POST("/jobs", h.Handle)
 
 	// ヘルスチェック
