@@ -4,68 +4,84 @@
 
 **冪等・再実行前提**の非同期APIテンプレートを実装しました。
 
-## プロジェクト構成
 
-## プロジェクト構成
+## アーキテクチャ
 
+**Event Stream (Kafka) → Pub/Sub (SNS) → Queue (SQS)**
+
+1. **API** -> **Kafka**: イベントを永続化（再計算・監査用）
+2. **Bridge** -> **SNS**: リアルタイム通知
+3. **SNS** -> **SQS**: ファンアウト・バッファリング
+4. **Worker**: 処理（失敗時はSQSがリトライ）
+
+## 環境設定
+
+## 環境設定
+
+1. **Docker (Kafka) 起動**
+   ```bash
+   docker-compose up -d
+   ```
+   * ローカルの `localhost:9092` でKafkaが起動します。
+   * コンテナ名: `kafka`
+
+2. **Topic 作成 (初回のみ)**
+   ```bash
+   docker exec -it kafka kafka-topics \
+     --create \
+     --topic events \
+     --bootstrap-server localhost:9092 \
+     --partitions 1 \
+     --replication-factor 1
+   ```
+
+3. **`.env` ファイル設定**
+   `.env.example` をコピーして `.env` を作成します。
+   ```bash
+   cp .env.example .env
+   ```
+   **推奨設定:**
+   ```env
+   KAFKA_BROKER=localhost:9092
+   KAFKA_TOPIC=events
+   ```
+
+### 動作確認（疎通チェック）
+
+**Consumer（受信待機）**
+```bash
+docker exec -it kafka kafka-console-consumer \
+  --topic events \
+  --bootstrap-server localhost:9092
 ```
-api/
-├── cmd/
-│   ├── api/main.go       # HTTP API サーバー
-│   └── worker/main.go    # SQS Consumer (SNS Subscriber)
-└── internal/
-    ├── event/event.go    # 共通イベント定義
-    ├── handler/create_job.go  # ジョブ作成ハンドラー
-    ├── pubsub/publisher.go    # SNS Publisher
-    └── usecase/process_job.go # 処理ロジック
+
+**Producer（送信テスト）** -- 別ターミナルで実行
+```bash
+docker exec -it kafka kafka-console-producer \
+  --topic events \
+  --bootstrap-server localhost:9092
 ```
-
-## 実装のポイント
-
-| コンポーネント | 責務 |
-|---|---|
-| **API** | SNS トピックへの Publish のみ（疎結合） |
-| **Worker** | SQS から受信。再試行は SQS の標準機能（VisibilityTimeout + DLQ）に任せる |
-
-### 非同期API設計原則 (Pub/Sub)
-
-- ✅ Publisher は Subscriber を知らない
-- ✅ イベントは事実として定義
-
-### Worker設計原則
-
-- ✅ SQS 標準のリトライ機構を利用
-- ✅ 手動での再エンキューは行わない (Basic No Philosophy)
-
-## 環境変数 (.env)
-
-プロジェクトルートに `.env` ファイルを作成して設定します。
-
-```env
-# AWS認証情報
-AWS_ACCESS_KEY_ID=your_access_key
-AWS_SECRET_ACCESS_KEY=your_secret_key
-AWS_REGION=ap-northeast-1
-
-# SNS Topic ARN (API用)
-SNS_TOPIC_ARN="arn:aws:sns:ap-northeast-1:000000000000:job-topic"
-
-# SQS Queue URL (Worker用)
-SQS_QUEUE_URL="https://sqs.ap-northeast-1.amazonaws.com/×/job-queue"
-
-# アプリケーション設定
-PORT=8080
-```
+入力後にEnterを押すと Consumer 側に表示されます。
 
 ## 使い方
 
-```bash
-# API起動
-go run ./cmd/api
+1. Kafka起動
+   ```bash
+   docker-compose up -d
+   ```
 
-# Worker起動（別ターミナル）
-go run ./cmd/worker
-```
+2. サービス起動（別々のターミナルで）
+
+   ```bash
+   # API: ポート8080
+   go run ./cmd/api
+
+   # Bridge: Kafka -> SNS
+   go run ./cmd/bridge
+
+   # Worker: SQS Consumer
+   go run ./cmd/worker
+   ```
 ※ `.env` ファイルが自動的に読み込まれます。
 
 
