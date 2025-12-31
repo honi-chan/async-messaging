@@ -1,18 +1,15 @@
 package main
 
 import (
-	"context"
 	"log"
 	"os"
 
-	"github.com/aws/aws-sdk-go-v2/config"
-	"github.com/aws/aws-sdk-go-v2/service/sns"
 	"github.com/joho/godotenv"
 	"github.com/labstack/echo/v4"
 	"github.com/labstack/echo/v4/middleware"
 
 	"async-messaging/internal/handler"
-	"async-messaging/internal/pubsub"
+	"async-messaging/internal/stream"
 )
 
 func main() {
@@ -21,25 +18,19 @@ func main() {
 		log.Println("No .env file found, using system environment variables")
 	}
 
-	// AWS設定の読み込み
-	cfg, err := config.LoadDefaultConfig(context.Background())
-	if err != nil {
-		log.Fatalf("unable to load SDK config: %v", err)
+	// Kafka設定
+	kafkaBroker := os.Getenv("KAFKA_BROKER")
+	if kafkaBroker == "" {
+		kafkaBroker = "localhost:9092"
+	}
+	kafkaTopic := os.Getenv("KAFKA_TOPIC")
+	if kafkaTopic == "" {
+		kafkaTopic = "events"
 	}
 
-	// SNSクライアント作成
-	snsClient := sns.NewFromConfig(cfg)
-
-	// 環境変数からトピックARNを取得
-	topicArn := os.Getenv("SNS_TOPIC_ARN")
-	// 開発用ダミーARN (本来は必須エラーにするべきだが、動作確認用に入れている場合もある)
-	if topicArn == "" {
-		topicArn = "arn:aws:sns:ap-northeast-1:000000000000:job-topic"
-		log.Println("WARNING: SNS_TOPIC_ARN is not set, using dummy ARN")
-	}
-
-	// Publisher初期化
-	publisher := pubsub.NewPublisher(snsClient, topicArn)
+	// Producer初期化
+	producer := stream.NewProducer([]string{kafkaBroker}, kafkaTopic)
+	defer producer.Close()
 
 	// Echo初期化(Web サーバーを作っている)
 	e := echo.New()
@@ -47,7 +38,7 @@ func main() {
 	e.Use(middleware.Recover())
 
 	// ハンドラー登録
-	h := handler.NewCreateJobHandler(publisher)
+	h := handler.NewCreateJobHandler(producer)
 	e.POST("/jobs", h.Handle)
 
 	// ヘルスチェック

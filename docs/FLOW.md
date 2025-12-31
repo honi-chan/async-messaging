@@ -7,8 +7,8 @@ POST /jobs リクエスト
 ┌─────────────────────────────────────────────────────────┐
 │ cmd/api/main.go                                         │
 │   main()                                                │
-│     └─ e.POST("/jobs", h.Handle)  ← ルーティング登録    │
-│     └─ pubsub.NewPublisher(...)   ← SNS Publisher初期化 │
+│     └─ e.POST("/jobs", h.Handle)                        │
+│     └─ stream.NewProducer(...)    ← Kafka Producer初期化│
 └─────────────────────────────────────────────────────────┘
        │
        ▼
@@ -17,19 +17,34 @@ POST /jobs リクエスト
 │   CreateJobHandler.Handle(c echo.Context)               │
 │     ├─ c.Bind(&req)           ← リクエストパース        │
 │     ├─ uuid.NewString()       ← ジョブID生成            │
-│     ├─ json.Marshal(payload)  ← ペイロードJSON化        │
-│     ├─ h.publisher.Publish()  ← SNSへ送信 ───────────┐  │
+│     ├─ h.producer.Produce()   ← Kafkaへ送信 ─────────┐  │
 │     └─ return 202 Accepted    ← レスポンス返却       │  │
 └──────────────────────────────────────────────────────│──┘
                                                        │
        ┌───────────────────────────────────────────────┘
        ▼
 ┌─────────────────────────────────────────────────────────┐
-│ internal/pubsub/publisher.go                            │
-│   Publisher.Publish(ctx, ev)                            │
-│     └─ sns.Publish()          ← AWS SNS API呼び出し     │
+│ internal/stream/producer.go                             │
+│   Producer.Produce(ctx, ev)                             │
+│     └─ kafka.Writer.WriteMessages() ← Kafkaへ書き込み   │
 └─────────────────────────────────────────────────────────┘
        │
+       ▼
+    [Kafka Topic: events] ──(Consumer Group)──┐
+                                              │
+       ┌──────────────────────────────────────┘
+       ▼
+┌─────────────────────────────────────────────────────────┐
+│ cmd/bridge/main.go                                      │
+│   main()                                                │
+│     └─ stream.NewConsumer(...)                          │
+│     └─ pubsub.NewPublisher(...)                         │
+│     └─ consumer.Consume()     ← 無限ループ              │
+│          ├─ publisher.Publish() ──────────────┐         │
+│          └─ consumer.CommitMessages()         │         │
+└──────────────────────────────────────────────────────│──┘
+                                                       │
+       ┌───────────────────────────────────────────────┘
        ▼
     [SNS Topic] ──(Subscription)──▶ [SQS Queue]
                                        │
@@ -44,26 +59,14 @@ POST /jobs リクエスト
 │           ├─ handler.Handle() ← ユースケース呼び出し ─┐ │
 │           └─ client.DeleteMessage() ← 削除            │ │
 └───────────────────────────────────────────────────────│─┘
-                                                        │
-       ┌────────────────────────────────────────────────┘
-       ▼
-┌─────────────────────────────────────────────────────────┐
-│ internal/usecase/process_job.go                         │
-│   Handler.Handle(ctx, ev)                               │
-│     ├─ json.Unmarshal(payload)                          │
-│     └─ process()              ← ビジネスロジック        │
-│                               (失敗時はerror返却        │
-│                                → VisibilityTimeout      │
-│                                → SQSが自動再試行)       │
-└─────────────────────────────────────────────────────────┘
 ```
 
 ## 呼び出し順序まとめ
 
-| # | ファイル | 関数 | 役割 |
+| # | コンポーネント | 技術 | 役割 |
 |---|---|---|---|
-| 1 | `cmd/api/main.go` | `main()` | サーバー起動、SNS Publisher設定 |
-| 2 | `internal/handler/create_job.go` | `Handle()` | イベント作成、Publish呼び出し |
-| 3 | `internal/pubsub/publisher.go` | `Publish()` | SNS TopicへPublish |
-| 4 | `cmd/worker/main.go` | `processMessages()` | SQSからメッセージ受信 (SNS経由) |
-| 5 | `internal/usecase/process_job.go` | `Handle()` | 処理実行 (再試行はSQS任せ) |
+| 1 | **API** | Kafka Producer | イベントを「事実」としてKafkaに記録 (Source of Truth) |
+| 2 | **Bridge** | Kafka Consumer + SNS Publisher | Kafkaからイベントを読み取り、SNSへ即時配信 |
+| 3 | **SNS** | AWS SNS | ファンアウト（今回はSQSへ） |
+| 4 | **SQS** | AWS SQS | バッファリング、再試行管理 |
+| 5 | **Worker** | SQS Consumer | 重い処理を実行 (失敗時はSQSがリトライ) |

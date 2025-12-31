@@ -9,7 +9,7 @@ import (
 	"github.com/labstack/echo/v4"
 
 	"async-messaging/internal/event"
-	"async-messaging/internal/pubsub"
+	"async-messaging/internal/stream"
 )
 
 // CreateJobRequest はジョブ作成リクエスト
@@ -20,12 +20,12 @@ type CreateJobRequest struct {
 
 // CreateJobHandler はジョブ作成ハンドラー
 type CreateJobHandler struct {
-	publisher *pubsub.Publisher
+	producer *stream.Producer
 }
 
 // NewCreateJobHandler は新しいハンドラーを作成
-func NewCreateJobHandler(p *pubsub.Publisher) *CreateJobHandler {
-	return &CreateJobHandler{publisher: p}
+func NewCreateJobHandler(p *stream.Producer) *CreateJobHandler {
+	return &CreateJobHandler{producer: p}
 }
 
 // Handle はジョブ作成リクエストを処理
@@ -44,14 +44,17 @@ func (h *CreateJobHandler) Handle(c echo.Context) error {
 	payloadBytes, _ := json.Marshal(payload)
 
 	ev := event.Event{
-		ID:        uuid.NewString(),
-		Type:      "job.created",
-		Payload:   payloadBytes,
-		CreatedAt: time.Now(),
+		ID:            uuid.NewString(),
+		Type:          "job.created",
+		AggregateID:   uuid.NewString(), // New aggregate for each job
+		AggregateType: "job",
+		SchemaVersion: 1,
+		OccurredAt:    time.Now(),
+		Payload:       payloadBytes,
 	}
 
-	if err := h.publisher.Publish(c.Request().Context(), ev); err != nil {
-		return c.JSON(http.StatusInternalServerError, map[string]string{"error": "publish failed"})
+	if err := h.producer.Produce(c.Request().Context(), ev); err != nil {
+		return c.JSON(http.StatusInternalServerError, map[string]string{"error": "produce failed"})
 	}
 
 	// 非同期APIの要：200ではなく202 Accepted
